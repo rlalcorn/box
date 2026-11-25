@@ -1438,7 +1438,8 @@ target it stands for. For a vendor Box does not know, write `kind = "otlp"` with
 
 A secret needs an `https://` destination unless the destination is loopback. Box checks each
 `aws://` and `credsd://` telemetry credential before the workload starts. A profile that can't
-sign, a daemon that doesn't answer, or a credential the daemon doesn't list stops the run.
+sign, a daemon that doesn't answer, or a credential the daemon doesn't list stops the run. A
+`credsd://` credential needs credsd 0.2.0 or later.
 
 When the run ends, Box prints one stderr line if an export to a configured target failed, or if the
 final export did not finish in time. Set `STRANDS_BOX_TELEMETRY_DEBUG` to any non-empty value in the

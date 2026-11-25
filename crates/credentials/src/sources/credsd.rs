@@ -26,6 +26,9 @@ const HEALTH_METHOD: &str = "system/health";
 /// The credential-name listing the preflight sends once.
 const LIST_METHOD: &str = "credential/list";
 
+/// The JSON-RPC code for invalid params, which a credsd older than 0.2.0 returns for `credential`.
+const INVALID_PARAMS: i64 = -32602;
+
 /// The fixed JSON-RPC request id; a result whose id differs is refused.
 const REQUEST_ID: u64 = 1;
 
@@ -403,6 +406,19 @@ fn map_error(error: &RpcError, subject: Subject<'_>) -> CredentialError {
         (Some(_), _) => CredentialError::KeystoreAccess(format!(
             "credsd reported an unrecognised failure for {subject}"
         )),
+        (None, Subject::Credential(_)) if error.code == INVALID_PARAMS => {
+            CredentialError::Credential(format!(
+                "credsd rejected the request for {subject} (protocol code {INVALID_PARAMS}); this \
+                 box needs credsd 0.2.0 or later, and credsd accepts a credential name of \
+                 letters, digits, `.`, `_`, and `-`"
+            ))
+        }
+        (None, Subject::List) if error.code == INVALID_PARAMS => {
+            CredentialError::Credential(format!(
+                "credsd rejected the request for {subject} (protocol code {INVALID_PARAMS}); this \
+                 box needs credsd 0.2.0 or later"
+            ))
+        }
         (None, _) => CredentialError::Credential(format!(
             "credsd rejected the request for {subject} (protocol code {code})",
             code = error.code
@@ -647,12 +663,18 @@ mod tests {
             );
         }
         for (code, remedy) in [
-            ("CONFIG_DRIFTED", "run `creds revalidate`"),
+            (
+                "CONFIG_DRIFTED",
+                "read the change, then run `creds revalidate`",
+            ),
             (
                 "CONFIG_INVALID",
                 "correct the file, then run `creds revalidate`",
             ),
-            ("INTEGRITY_UNVERIFIABLE", "run `creds revalidate`"),
+            (
+                "INTEGRITY_UNVERIFIABLE",
+                "cannot verify its configuration; run `creds revalidate`",
+            ),
             (
                 "CUSTODY_BROKEN",
                 "an operator must repair it and restart the daemon",
@@ -681,6 +703,61 @@ mod tests {
             case("SOMETHING_NEW"),
             CredentialError::KeystoreAccess(_)
         ));
+    }
+
+    /// Invalid params with no domain code names the minimum credsd version, for a credential and
+    /// for the list.
+    #[test]
+    fn invalid_params_names_the_minimum_credsd_version() {
+        let line =
+            br#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"unknown member"}}"#;
+        let get = parse_response::<CredentialResult>(line, Subject::Credential("work"))
+            .expect_err("invalid params fails");
+        assert!(matches!(get, CredentialError::Credential(_)));
+        let message = get.to_string();
+        assert!(
+            message.contains(
+                "credsd rejected the request for credential \"work\" (protocol code -32602)"
+            ) && message.contains("this box needs credsd 0.2.0 or later")
+                && message.contains("letters, digits"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("unknown member"),
+            "never echoes error.message"
+        );
+        let list = parse_response::<ListResult>(line, Subject::List)
+            .expect_err("invalid params fails")
+            .to_string();
+        assert!(
+            list.contains("credential/list (protocol code -32602)")
+                && list.contains("this box needs credsd 0.2.0 or later")
+                && !list.contains("letters, digits"),
+            "{list}"
+        );
+    }
+
+    /// The list arms of `REAUTH_REQUIRED` and `CONFIG_DRIFTED` name the list request.
+    #[test]
+    fn list_domain_codes_name_the_list() {
+        for (code, expected) in [
+            (
+                "REAUTH_REQUIRED",
+                "credsd needs re-authentication for credential/list",
+            ),
+            (
+                "CONFIG_DRIFTED",
+                "credsd refused credential/list: its configuration changed",
+            ),
+        ] {
+            let line = format!(
+                r#"{{"jsonrpc":"2.0","id":1,"error":{{"code":-32000,"message":"x","data":{{"code":"{code}"}}}}}}"#
+            );
+            let error = parse_response::<ListResult>(line.as_bytes(), Subject::List)
+                .expect_err("an error result fails")
+                .to_string();
+            assert!(error.contains(expected), "{code}: {error}");
+        }
     }
 
     /// An envelope error with no domain code (e.g. an older daemon rejecting the request) is a hard

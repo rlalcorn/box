@@ -193,6 +193,23 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A declared name must equal a listed name. A prefix, another case, or padding is no match, and
+    /// an unlisted name is refused wherever it sits among listed ones.
+    #[test]
+    fn only_an_exact_name_is_listed() {
+        let path = socket_path();
+        spawn_daemon(path.as_path(), |method| match method {
+            "system/health" => health_reply(1),
+            _ => list_reply(),
+        });
+        for near in ["de", "DEV", "dev ", "stag"] {
+            credsd_preflight(Some(&path), &[near]).expect_err("only an exact name is listed");
+        }
+        credsd_preflight(Some(&path), &["prod-inference", "dev"])
+            .expect_err("the first name is not listed");
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// An unauthorized caller's `CREDENTIAL_NOT_FOUND` is a credential error.
     #[test]
     fn an_unauthorized_list_fails() {
